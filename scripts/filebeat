@@ -1,0 +1,40 @@
+filebeat.inputs:
+- type: filestream
+  id: dengue-reader
+  enabled: true
+  paths:
+    - /usr/share/filebeat/datafiles/*.ndjson
+  parsers:
+    - ndjson:
+        keys_under_root: true
+        overwrite_keys: true
+        add_error_key: true
+        message_key: "message"
+
+# Desativa módulos não utilizados
+filebeat.config.modules:
+  path: ${path.config}/modules.d/*.yml
+  reload.enabled: false
+
+processors:
+  - add_host_metadata:
+      enabled: false  # Desativa metadados de host
+  - add_cloud_metadata:
+      enabled: false  # Desativa metadados de cloud
+  - add_docker_metadata:
+      enabled: false  # Desativa metadados de docker
+  - drop_fields:
+      fields: ["ecs", "agent", "input"]  # Remove campos desnecessários
+
+output.logstash:
+  hosts: ["logstash:5044"]
+  enabled: true
+
+logging:
+  level: warning  # Reduz verbosidade
+  to_files: true
+  files:
+    path: /var/log/filebeat
+    name: filebeat.log
+    keepfiles: 2
+    permissions: 0644
