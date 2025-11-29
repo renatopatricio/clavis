@@ -1,5 +1,3 @@
-# clavis
-Frameworks: Logstash, Beats e Kibana
 
 # 🦟 Projeto Clavis - Pipeline de Dados de Dengue
 
