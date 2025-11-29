@@ -1,0 +1,115 @@
+input {
+  beats {
+    port => 5044
+  }
+}
+
+filter {
+  # Parse do JSON que vem no campo "message"
+  json {
+    source => "message"
+    target => "parsed_data"
+    tag_on_failure => ["json_error"]
+  }
+
+  # Se o parse foi bem-sucedido
+  if "json_error" not in [tags] {
+    # Remove todos os campos do Filebeat que não são os dados da dengue
+    mutate {
+      remove_field => [ 
+        "host", "agent", "ecs", "log", "input", 
+        "cloud", "container", "tags", "@version",
+        "message", "event"
+      ]
+    }
+    
+    # Move os campos parseados para o root e remove campos nulos
+    ruby {
+      code => '
+        if event.get("parsed_data").is_a?(Hash)
+          # Primeiro remove campos nulos/vazios do parsed_data
+          event.get("parsed_data").delete_if { |k, v| v.nil? || (v.is_a?(String) && v.empty?) }
+          
+          # Move campos para o root
+          event.get("parsed_data").each { |key, value|
+            event.set(key, value)
+          }
+          event.remove("parsed_data")
+        end
+        
+        # Remove campos nulos do evento final
+        event.to_hash.each { |k,v|
+          event.remove(k) if v.nil? || (v.is_a?(String) && v.empty?)
+        }
+      '
+    }
+
+    # Converte campos numéricos importantes
+    if [nu_ano] {
+      mutate {
+        convert => { "nu_ano" => "integer" }
+      }
+    }
+    
+    if [nu_idade_n] {
+      mutate {
+        convert => { "nu_idade_n" => "float" }
+      }
+    }
+
+    # Adiciona timestamp de processamento
+    mutate {
+      add_field => { 
+        "processed_at" => "%{@timestamp}"
+        "pipeline_version" => "1.0"
+        "data_source" => "SUS_Dengue"
+      }
+    }
+
+    # Data parsing para campos de data
+    if [dt_notific] {
+      date {
+        match => [ "dt_notific", "yyyy-MM-dd" ]
+        target => "dt_notific_parsed"
+      }
+    }
+
+    if [dt_sin_pri] {
+      date {
+        match => [ "dt_sin_pri", "yyyy-MM-dd" ]
+        target => "dt_sin_pri_parsed"
+      }
+    }
+  }
+}
+
+output {
+  # Debug no console (mantenha para ver a estrutura limpa)
+  stdout {
+    codec => rubydebug {
+      metadata => true  # Mostra metadados para debug
+    }
+  }
+
+  # Eventos válidos vão para Elasticsearch
+  if "json_error" not in [tags] {
+    elasticsearch {
+      hosts => ["http://elasticsearch:9200"]
+      index => "dengue-data-%{+YYYY.MM.dd}"
+      document_id => "%{id_agravo}-%{dt_notific}-%{sg_uf_not}-%{id_municip}"
+    }
+  }
+
+  # Eventos com erro
+  if "json_error" in [tags] {
+    file {
+      path => "/usr/share/logstash/error_logs/erro-%{+YYYY-MM-dd}.log"
+      codec => json_lines
+    }
+
+    elasticsearch {
+      hosts => ["http://elasticsearch:9200"]
+      index => "dengue-deadletter-%{+YYYY.MM.dd}"
+    }
+  }
+}
