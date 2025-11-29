@@ -1,0 +1,93 @@
+import requests
+import json
+import logging
+import time
+from typing import Dict, Any, Optional, Union, List
+from pathlib import Path
+
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(levelname)s - %(message)s'
+)
+logger = logging.getLogger(__name__)
+
+class SUSDataExtractor:
+    def __init__(self, base_url: str, max_retries: int = 3):
+        self.base_url = base_url
+        self.max_retries = max_retries
+        self.session = requests.Session()
+        self.session.headers.update({
+            'User-Agent': 'Clavis-Project/1.0',
+            'Accept': 'application/json'
+        })
+
+    def make_request(self, params: Dict[str, Any]) -> Optional[Union[List, Dict]]:
+        for attempt in range(self.max_retries):
+            try:
+                r = self.session.get(self.base_url, params=params, timeout=30)
+                r.raise_for_status()
+                data = r.json()
+                logger.info(f"Requisição bem-sucedida para {params}")
+                return data
+
+            except Exception as e:
+                logger.warning(f"Tentativa {attempt+1} falhou: {e}")
+                time.sleep(2 ** attempt)
+
+        logger.error("Falha após todas as tentativas.")
+        return None
+
+    def extract_list_from_api(self, data: Union[List, Dict]) -> Optional[List]:
+        """
+        A API retorna exatamente isso:
+        { "parametros": [ ... ] }
+        """
+        if isinstance(data, dict) and "parametros" in data and isinstance(data["parametros"], list):
+            logger.info("Lista encontrada em data['parametros']")
+            return data["parametros"]
+
+        logger.error("Estrutura inesperada: não foi possível encontrar data['parametros']")
+        return None
+
+    def save_data_ndjson(self, dengue_list: List, filename: str) -> bool:
+        try:
+            output_path = Path(filename)
+            output_path.parent.mkdir(parents=True, exist_ok=True)
+
+            with open(output_path, "w", encoding="utf-8") as f:
+                for item in dengue_list:
+                    f.write(json.dumps(item, ensure_ascii=False) + "\n")
+
+            logger.info(f"Arquivo NDJSON salvo em {filename} ({len(dengue_list)} linhas)")
+            return True
+
+        except Exception as e:
+            logger.error(f"Erro ao salvar NDJSON: {e}")
+            return False
+
+    def extract_dengue_data(self, params: Dict[str, Any], output_file: str) -> bool:
+        data = self.make_request(params)
+        if data is None:
+            logger.error("Nenhum dado retornado.")
+            return False
+
+        dengue_list = self.extract_list_from_api(data)
+        if dengue_list is None:
+            logger.error("Falha ao identificar lista de registros na API.")
+            return False
+
+        return self.save_data_ndjson(dengue_list, output_file)
+
+
+if __name__ == "__main__":
+    extractor = SUSDataExtractor("https://apidadosabertos.saude.gov.br/arboviroses/dengue")
+
+    params = {
+        "ano": 2019,
+        "mes": 3,
+        "uf": "SP",
+        "municipio": "",
+        "classificacao": ""
+    }
+
+    extractor.extract_dengue_data(params, "data/dengue.ndjson")
